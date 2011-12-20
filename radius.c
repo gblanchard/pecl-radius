@@ -384,49 +384,153 @@ PHP_FUNCTION(radius_put_addr)
 }
 /* }}} */
 
-/* {{{ proto bool radius_put_vendor_string(desc, vendor, type, str) */
+/* {{{ proto bool radius_put_vendor_string(desc, vendor, type, str, option, tag) */
 PHP_FUNCTION(radius_put_vendor_string)
 {
 	char *str;
+        unsigned char *buf;
 	int str_len;
-	long type, vendor;
+        size_t len;
+	long type, vendor, option, tag;
 	radius_descriptor *raddesc;
 	zval *z_radh;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "rlls", &z_radh, &vendor, &type, &str, &str_len)
+        option = tag = 0;
+
+	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "rlls|ll", &z_radh, &vendor, &type, &str, &str_len, &option, &tag)
 		== FAILURE) {
 		return;
 	}
+        
+        if (tag > 256 || tag < 0) {
+            zend_error(E_ERROR, "tag must be between 0 and 256");
+            RETURN_FALSE;
+        }
+        
+        if ((option & RAD_OPTION_TAGGED) && !tag) {
+            zend_error(E_ERROR, "RAD_OPTION_TAGGED but no tag defined...");
+            RETURN_FALSE;            
+        }
 
-	ZEND_FETCH_RESOURCE(raddesc, radius_descriptor *, &z_radh, -1, "rad_handle", le_radius);
+        ZEND_FETCH_RESOURCE(raddesc, radius_descriptor *, &z_radh, -1, "rad_handle", le_radius);
+        
+        if (option & RAD_OPTION_SALT) {
 
-	if (rad_put_vendor_string(raddesc->radh, vendor, type, str) == -1) {
-		RETURN_FALSE;
-	} else {
-		RETURN_TRUE;
-	}
+                len = str_len + 1;
+                if ((len & 0x0f) != 0) {
+                        len += 0x0f;
+                        len &= ~0x0f;
+                }
+                len += 2;
+
+                buf = emalloc(len);
+
+                if (rad_salt_value(raddesc->radh, str, str_len, buf, &len) == -1) {
+                        zend_error(E_ERROR, "Unable to encrypt VSA %s", raddesc->radh->errmsg);
+                }
+                str = buf;
+        } else {
+                len = str_len;
+        }
+
+        if (option & RAD_OPTION_TAGGED) {
+            if (rad_put_vendor_attr_tag(raddesc->radh, vendor, type, str, len, tag) == -1) {
+                    RETURN_FALSE;
+            } else {
+                    RETURN_TRUE;
+            }
+        } else {
+            if (rad_put_vendor_attr(raddesc->radh, vendor, type, str, len) == -1) {
+                    RETURN_FALSE;
+            } else {
+                    RETURN_TRUE;
+            }
+        }
 }
 /* }}} */
 
-/* {{{ proto bool radius_put_vendor_int(desc, vendor, type, int) */
+/* {{{ proto bool radius_put_vendor_int(desc, vendor, type, int, option, tag) */
 PHP_FUNCTION(radius_put_vendor_int)
 {
-	long type, vendor, val;
+	long type, vendor, val, option, tag;
+        unsigned char *buf;
+	size_t len;
+        u_int32_t val32;
 	radius_descriptor *raddesc;
 	zval *z_radh;
+        int i;
+        
+        option = tag = 0;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "rlll", &z_radh, &vendor, &type, &val)
+	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "rlll|ll", &z_radh, &vendor, &type, &val, &option, &tag)
 		== FAILURE) {
 		return;
 	}
 
+        if (tag > 256 || tag < 0) {
+            zend_error(E_ERROR, "tag must be between 0 and 256");
+            RETURN_FALSE;
+        }
+
+        if ((option & RAD_OPTION_TAGGED) && !tag) {
+            zend_error(E_ERROR, "RAD_OPTION_TAGGED but no tag defined...");
+            RETURN_FALSE;
+        }
+
 	ZEND_FETCH_RESOURCE(raddesc, radius_descriptor *, &z_radh, -1, "rad_handle", le_radius);
 
-	if (rad_put_vendor_int(raddesc->radh, vendor, type, val) == -1) {
-		RETURN_FALSE;
-	} else {
-		RETURN_TRUE;
-	}
+        if (option & RAD_OPTION_SALT) {
+                val32 = htonl(val);
+                //val32 = val;
+
+                len = sizeof(u_int32_t) + 1;
+                if ((len & 0x0f) != 0) {
+                        len += 0x0f;
+                        len &= ~0x0f;
+                }
+                len += 2;
+
+                buf = emalloc(len) + 1;
+                if (rad_salt_value(raddesc->radh, &val32, sizeof(val32), buf, &len) == -1) {
+                        zend_error(E_ERROR, "Unable to encrypt VSA %s", raddesc->radh->errmsg);
+                }
+
+                printf("output len %i\n", len);
+
+                for (i=0;i < len;i++) {
+                        printf("%02hx", buf[i]);
+                }
+                printf("\n");
+
+                u_int32_t test;
+                size_t lentest;
+                if (rad_demangle_mppe_key(raddesc->radh, buf, len, &test, &lentest) == -1) {
+                        zend_error(E_ERROR, "Unable to demangle VSA %s", raddesc->radh->errmsg);
+                }
+
+                printf("vendor %i, type %i\n", vendor, type);
+                printf("output len = %i, value %i\n", lentest, test);
+
+        } else {
+                val32 = htonl(val);
+                buf = (unsigned char *)&val32;
+                len = sizeof(val32);
+        }
+
+        if (option & RAD_OPTION_TAGGED) {
+                printf("not supposed to be here\n");
+                if (rad_put_vendor_attr_tag(raddesc->radh, vendor, type, buf, len, tag) == -1) {
+                    RETURN_FALSE;
+                } else {
+                    RETURN_TRUE;
+                }
+        } else {
+                if (rad_put_vendor_attr(raddesc->radh, vendor, type, buf, len) == -1) {
+                    RETURN_FALSE;
+                } else {
+                    RETURN_TRUE;
+                }
+        }
 }
 /* }}} */
 
@@ -454,18 +558,32 @@ PHP_FUNCTION(radius_put_vendor_attr)
 }
 /* }}} */
 
-/* {{{ proto bool radius_put_vendor_addr(desc, vendor, type, addr) */
+/* {{{ proto bool radius_put_vendor_addr(desc, vendor, type, addr, option, tag) */
 PHP_FUNCTION(radius_put_vendor_addr)
 {
-	long type, vendor;
+	long type, vendor, option, tag;
 	int addrlen;
 	char	*addr;
+        size_t  len;
+        unsigned char *buf;
 	radius_descriptor *raddesc;
 	zval *z_radh;
 	struct in_addr intern_addr;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "rlls", &z_radh, &vendor,
-		&type, &addr, &addrlen) == FAILURE) {
+        option = tag = 0;
+
+        if (tag > 256 || tag < 0) {
+            zend_error(E_ERROR, "tag must be between 0 and 256");
+            RETURN_FALSE;
+        }
+
+        if ((option & RAD_OPTION_TAGGED) && !tag) {
+            zend_error(E_ERROR, "RAD_OPTION_TAGGED but no tag defined...");
+            RETURN_FALSE;
+        }
+
+	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "rlls|ll", &z_radh, &vendor,
+		&type, &addr, &addrlen, &option, &tag) == FAILURE) {
 		return;
 	}
 
@@ -476,11 +594,38 @@ PHP_FUNCTION(radius_put_vendor_addr)
 		RETURN_FALSE;
 	}
 
-	if (rad_put_vendor_addr(raddesc->radh, vendor, type, intern_addr) == -1) {
-		RETURN_FALSE;
-	} else {
-		RETURN_TRUE;
-	}
+        if (option & RAD_OPTION_SALT) {
+
+                len = sizeof(u_int32_t) + 1;
+                if ((len & 0x0f) != 0) {
+                        len += 0x0f;
+                        len &= ~0x0f;
+                }
+                len += 2;
+
+                buf = emalloc(len);
+                if (rad_salt_value(raddesc->radh, &intern_addr, sizeof(struct in_addr), buf, &len) == -1) {
+                        zend_error(E_ERROR, "Unable to encrypt VSA %s", raddesc->radh->errmsg);
+                }
+
+        } else {
+                buf = (char *)&intern_addr;
+                len = sizeof(struct in_addr);
+        }
+
+        if (option & RAD_OPTION_TAGGED) {
+                if (rad_put_vendor_attr_tag(raddesc->radh, vendor, type, buf, len, tag) == -1) {
+                    RETURN_FALSE;
+                } else {
+                    RETURN_TRUE;
+                }
+        } else {
+                if (rad_put_vendor_attr(raddesc->radh, vendor, type, buf, len) == -1) {
+                    RETURN_FALSE;
+                } else {
+                    RETURN_TRUE;
+                }
+        }
 }
 /* }}} */
 

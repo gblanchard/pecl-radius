@@ -29,6 +29,8 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 This code cannot simply be copied and put under the GNU Public License or 
 any other GPL-like (LGPL, GPL2) License.
 
+Sends a Radius dynamic Disconnect Request message to a NAS.
+
 */
 <?php
 

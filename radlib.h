@@ -44,6 +44,13 @@
 #define RAD_ACCOUNTING_RESPONSE		5
 #define RAD_ACCESS_CHALLENGE		11
 
+#define RAD_DISCONNECT_REQUEST          40
+#define RAD_DISCONNECT_ACK              41
+#define RAD_DISCONNECT_NAK              42
+#define RAD_COA_REQUEST                 43
+#define RAD_COA_ACK                     44
+#define RAD_COA_NACK                    45
+
 /* Attribute types and values */
 #define RAD_USER_NAME			1	/* String */
 #define RAD_USER_PASSWORD		2	/* String */
@@ -174,6 +181,10 @@
 #define	RAD_ACCT_MULTI_SESSION_ID	50	/* String */
 #define	RAD_ACCT_LINK_COUNT		51	/* Integer */
 
+#define RAD_OPTION_NONE                 0
+#define RAD_OPTION_TAGGED               1
+#define RAD_OPTION_SALT                 2
+
 struct rad_handle;
 struct timeval;
 
@@ -201,5 +212,5 @@ int			 rad_send_request(struct rad_handle *);
 const char		*rad_server_secret(struct rad_handle *);
 const char		*rad_strerror(struct rad_handle *);
 int			 rad_demangle(struct rad_handle *, const void *, size_t, u_char *);
-
+int                      rad_salt_value(struct rad_handle *, const void *, const size_t inlen, u_char *, size_t *);
 #endif /* _RADLIB_H_ */

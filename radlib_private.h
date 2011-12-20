@@ -42,6 +42,7 @@
 /* Handle types */
 #define RADIUS_AUTH		0   /* RADIUS authentication, default */
 #define RADIUS_ACCT		1   /* RADIUS accounting */
+#define RADIUS_COA		2   /* RADIUS Change of Authorization */
 
 /* Defaults */
 #define MAXTRIES		3
@@ -54,6 +55,7 @@
 #define ERRSIZE		128		/* Maximum error message length */
 #define MAXCONFLINE	1024		/* Maximum config file line length */
 #define MAXSERVERS	10		/* Maximum number of servers to try */
+#define STRINGSIZE      254             /* Maximum string length */
 #define MSGSIZE		4096		/* Maximum RADIUS message */
 #define PASSSIZE	128		/* Maximum significant password chars */
 
@@ -99,6 +101,14 @@ struct vendor_attribute {
 	u_int32_t vendor_value;
 	u_char attrib_type;
 	u_char attrib_len;
+	u_char attrib_data[1];
+};
+
+struct vendor_attribute_tag {
+	u_int32_t vendor_value;
+	u_char attrib_type;
+	u_char attrib_len;
+        u_char tag;
 	u_char attrib_data[1];
 };
 

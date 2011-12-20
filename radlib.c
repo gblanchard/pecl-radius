@@ -62,6 +62,8 @@ static int	 is_valid_response(struct rad_handle *, int,
 		    const struct sockaddr_in *);
 static int	 put_password_attr(struct rad_handle *, int,
 		    const void *, size_t);
+static int       put_tag_attr(struct rad_handle *, int, const int,
+                    const void *, size_t);
 static int	 put_raw_attr(struct rad_handle *, int,
 		    const void *, size_t);
 static int	 split(char *, char *[], int, char *, size_t);
@@ -486,13 +488,16 @@ rad_continue_send_request(struct rad_handle *h, int selected, int *fd,
 		if (++h->srv >= h->num_servers)
 			h->srv = 0;
 
-	if (h->request[POS_CODE] == RAD_ACCOUNTING_REQUEST)
+	if (h->request[POS_CODE] == RAD_ACCOUNTING_REQUEST ||
+                h->request[POS_CODE] == RAD_COA_REQUEST ||
+                h->request[POS_CODE == RAD_DISCONNECT_REQUEST]) {
 		/* Insert the request authenticator into the request */
 		insert_request_authenticator(h, h->srv);
-	else
+        } else {
 		/* Insert the scrambled password into the request */
 		if (h->pass_pos != 0)
 			insert_scrambled_password(h, h->srv);
+        }
 
 	/* Send the request */
 	n = sendto(h->fd, h->request, h->req_len, 0,
@@ -527,6 +532,7 @@ rad_create_request(struct rad_handle *h, int code)
 	h->request[POS_CODE] = code;
 	h->request[POS_IDENT] = ++h->ident;
 	/* Create a random authenticator */
+
 	for (i = 0;  i < LEN_AUTH;  i += 2) {
 		long r;
 		TSRMLS_FETCH();
@@ -534,8 +540,12 @@ rad_create_request(struct rad_handle *h, int code)
 		h->request[POS_AUTH+i] = (unsigned char) r;
 		h->request[POS_AUTH+i+1] = (unsigned char) (r >> 8);
 	}
+
 	h->req_len = POS_ATTRS;
-	h->request_created = 1;    
+	h->request_created = 1;
+
+        insert_request_authenticator(h, 0);
+
 	clear_password(h);
 	return 0;
 }
@@ -634,7 +644,9 @@ rad_init_send_request(struct rad_handle *h, int *fd, struct timeval *tv)
 		}
 	}
 
-	if (h->request[POS_CODE] == RAD_ACCOUNTING_REQUEST) {
+	if (h->request[POS_CODE] == RAD_ACCOUNTING_REQUEST ||
+                h->request[POS_CODE] == RAD_COA_REQUEST ||
+                h->request[POS_CODE] ==  RAD_DISCONNECT_REQUEST) {
 		/* Make sure no password given */
 		if (h->pass_pos || h->chap_pass) {
 			generr(h, "User or Chap Password in accounting request");
@@ -920,28 +932,55 @@ rad_put_vendor_addr(struct rad_handle *h, int vendor, int type,
 
 int
 rad_put_vendor_attr(struct rad_handle *h, int vendor, int type,
-    const void *value, size_t len)
+    const void *value, size_t len) {
+
+        return (rad_put_vendor_attr_tag(h, vendor, type,
+            value, len, -1));
+}
+
+int
+rad_put_vendor_attr_tag(struct rad_handle *h, int vendor, int type,
+    const void *value, size_t len, const int tag)
 {
 	struct vendor_attribute *attr;
+        struct vendor_attribute_tag *attr_t;
 	int res;
-    
-    if (!h->request_created) {
-        generr(h, "Please call rad_create_request()");
-        return -1;
-    }    
 
-	if ((attr = malloc(len + 6)) == NULL) {
-		generr(h, "malloc failure (%d bytes)", len + 6);
-		return -1;
-	}
+        if (!h->request_created) {
+            generr(h, "Please call rad_create_request()");
+            return -1;
+        }
 
-	attr->vendor_value = htonl(vendor);
-	attr->attrib_type = type;
-	attr->attrib_len = len + 2;
-	memcpy(attr->attrib_data, value, len);
+        if (tag < 0) {
+            if ((attr = malloc(len + 6)) == NULL) {
+                    generr(h, "malloc failure (%d bytes)", len + 6);
+                    return -1;
+            }
 
-	res = put_raw_attr(h, RAD_VENDOR_SPECIFIC, attr, len + 6);
-	free(attr);
+            attr->vendor_value = htonl(vendor);
+            attr->attrib_type = type;
+            attr->attrib_len = len + 2;
+            memcpy(attr->attrib_data, value, len);
+
+            res = put_raw_attr(h, RAD_VENDOR_SPECIFIC, attr, len + 6);
+            free(attr);
+
+        } else {
+            if ((attr_t = malloc(len + 7)) == NULL) {
+                    generr(h, "malloc failure (%d bytes)", len + 7);
+                    return -1;
+            }
+            
+            attr_t->vendor_value = htonl(vendor);
+            attr_t->attrib_type = type;
+            attr_t->attrib_len = len + 3;
+            attr_t->tag = tag;
+            memcpy(attr_t->attrib_data, value, len);
+            
+            res = put_raw_attr(h, RAD_VENDOR_SPECIFIC, attr_t, len + 7);
+            free(attr_t);
+        }
+
 	if (res == 0 && vendor == RAD_VENDOR_MICROSOFT
 	    && (type == RAD_MICROSOFT_MS_CHAP_RESPONSE
 	    || type == RAD_MICROSOFT_MS_CHAP2_RESPONSE)) {
@@ -960,10 +999,27 @@ rad_put_vendor_int(struct rad_handle *h, int vendor, int type, u_int32_t i)
 }
 
 int
+rad_put_vendor_int_tag(struct rad_handle *h, int vendor, int type, u_int32_t i,
+    const int tag)
+{
+	u_int32_t value;
+
+	value = htonl(i);
+	return (rad_put_vendor_attr_tag(h, vendor, type, &value, sizeof value, tag));
+}
+
+int
 rad_put_vendor_string(struct rad_handle *h, int vendor, int type,
     const char *str)
 {
 	return (rad_put_vendor_attr(h, vendor, type, str, strlen(str)));
+}
+
+int
+rad_put_vendor_string_tag(struct rad_handle *h, int vendor, int type,
+    const char *str, const int tag)
+{
+	return (rad_put_vendor_attr_tag(h, vendor, type, str, strlen(str), tag));
 }
 
 ssize_t
@@ -1030,6 +1086,73 @@ rad_demangle(struct rad_handle *h, const void *mangled, size_t mlen, u_char *dem
 	}
 
 	return 0;
+}
+
+int
+rad_salt_value(struct rad_handle *h, const void *in, const size_t inlen, u_char *out, size_t *outlen)
+{
+        char R[LEN_AUTH];
+        const char *S;
+        u_char *C;
+        uint8_t outvalue[STRINGSIZE + LEN_AUTH];
+        u_char b[16];
+        long r;
+        int i, n, len, slen;
+        MD5_CTX Context, old;
+
+	len = inlen + 1;
+	if ((len & 0x0f) != 0) {
+		len += 0x0f;
+		len &= ~0x0f;
+	}
+	*outlen = len + 2;
+
+	memcpy(outvalue + 3, in, inlen);
+	memset(outvalue + 3 + inlen, 0, sizeof(outvalue) - 3 - inlen);
+
+	/* We need the RADIUS Request-Authenticator */
+	if (rad_request_authenticator(h, R, sizeof R) != LEN_AUTH) {
+		generr(h, "Cannot obtain the RADIUS request authenticator");
+		return -1;
+	}
+
+	S = rad_server_secret(h);    /* We need the RADIUS secret */
+	slen = strlen(S);
+
+        TSRMLS_FETCH();
+        r = php_rand(TSRMLS_C);
+        // set high bit of salt to 1 as per RFC
+        outvalue[0] = (unsigned char) r | 0x80;
+        outvalue[1] = (unsigned char) (r >> 8);
+
+        outvalue[2] = inlen;
+
+        C = &outvalue[2];
+
+	MD5Init(&Context);
+	MD5Update(&Context, S, slen);
+	old = Context;
+
+	MD5Update(&Context, R, LEN_AUTH);
+	MD5Update(&Context, &outvalue[0], 2);
+
+	for (n = 0; n < len; n += 16) {
+		if (n > 0) {
+			Context = old;
+			MD5Update(&Context,
+				       outvalue + 2 + n - 16,
+				       16);
+		}
+
+		MD5Final(b, &Context);
+		for (i = 0; i < 16; i++) {
+			outvalue[i + 2 + n] ^= b[i];
+		}
+	}
+        
+        memcpy(out, outvalue, *outlen);
+        
+        return 0;
 }
 
 int
